@@ -1,0 +1,21 @@
+{
+  "name": "manip",
+  "version": "0.1.0",
+  "description": "CLI tool for manipulating Marp markdown slides by number",
+  "main": "dist/src/index.js",
+  "bin": {
+    "manip": "dist/src/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "tsc && node --test dist/test/parser.test.js dist/test/cli.test.js dist/test/images.test.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}
