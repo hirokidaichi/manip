@@ -1,5 +1,5 @@
 {
-  "name": "manip",
+  "name": "@hirokidaichi/manip",
   "version": "0.1.0",
   "description": "CLI tool for manipulating Marp markdown slides by number",
   "license": "MIT",
