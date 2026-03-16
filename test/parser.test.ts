@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parse, serialize } from "../src/parser.js";
+import { parse, serialize, parseSlideRange, ManipError } from "../src/parser.js";
 
 describe("parse", () => {
   it("parses frontmatter and slides", () => {
@@ -87,6 +87,46 @@ _color: white
     assert.match(doc.slides[0], /video-bg/);
     assert.match(doc.slides[0], /<video/);
     assert.match(doc.slides[0], /bg\.mp4/);
+  });
+
+  it("handles empty file", () => {
+    const doc = parse("");
+    assert.equal(doc.frontmatter, "");
+    assert.equal(doc.slides.length, 1);
+    assert.equal(doc.slides[0], "");
+  });
+
+  it("normalizes Windows CRLF line endings", () => {
+    const input = "---\r\nmarp: true\r\n---\r\n# Slide 1\r\n\r\n---\r\n\r\n# Slide 2\r\n";
+    const doc = parse(input);
+    assert.equal(doc.frontmatter, "---\nmarp: true\n---");
+    assert.equal(doc.slides.length, 2);
+    assert.match(doc.slides[0], /# Slide 1/);
+    assert.match(doc.slides[1], /# Slide 2/);
+  });
+
+  it("handles mixed CRLF and LF", () => {
+    const input = "---\r\nmarp: true\n---\n# Slide 1\r\n\n---\n\n# Slide 2\n";
+    const doc = parse(input);
+    assert.equal(doc.slides.length, 2);
+  });
+
+  it("handles unicode/emoji content", () => {
+    const input = `---
+marp: true
+---
+# スライド 1 🎉
+
+日本語テキスト
+
+---
+
+# Slide 2 ✨
+`;
+    const doc = parse(input);
+    assert.equal(doc.slides.length, 2);
+    assert.match(doc.slides[0], /スライド 1/);
+    assert.match(doc.slides[1], /Slide 2/);
   });
 });
 
@@ -177,6 +217,16 @@ speaker note
     assert.equal(doc.slides.length, 3);
     assert.equal(serialize(doc), input);
   });
+
+  it("round-trips CRLF content (normalized to LF)", () => {
+    const input = "---\r\nmarp: true\r\n---\r\n# Slide 1\r\n\r\n---\r\n\r\n# Slide 2\r\n";
+    const doc = parse(input);
+    const output = serialize(doc);
+    // After round-trip, CRLF is normalized to LF
+    assert.ok(!output.includes("\r\n"));
+    const reparsed = parse(output);
+    assert.equal(reparsed.slides.length, 2);
+  });
 });
 
 describe("slide manipulation", () => {
@@ -213,6 +263,32 @@ marp: true
     assert.match(result.slides[1], /# Slide 3/);
   });
 
+  it("delete first slide", () => {
+    const doc = parse(base);
+    doc.slides.splice(0, 1);
+    const result = parse(serialize(doc));
+    assert.equal(result.slides.length, 2);
+    assert.match(result.slides[0], /# Slide 2/);
+    assert.match(result.slides[1], /# Slide 3/);
+  });
+
+  it("delete last slide", () => {
+    const doc = parse(base);
+    doc.slides.splice(2, 1);
+    const result = parse(serialize(doc));
+    assert.equal(result.slides.length, 2);
+    assert.match(result.slides[0], /# Slide 1/);
+    assert.match(result.slides[1], /# Slide 2/);
+  });
+
+  it("delete until one slide remains", () => {
+    const doc = parse(base);
+    doc.slides.splice(1, 2);
+    const result = parse(serialize(doc));
+    assert.equal(result.slides.length, 1);
+    assert.match(result.slides[0], /# Slide 1/);
+  });
+
   it("append adds a slide at the end", () => {
     const doc = parse(base);
     doc.slides.push("\n# Slide 4\n");
@@ -230,5 +306,40 @@ marp: true
     assert.match(result.slides[1], /# Inserted/);
     assert.match(result.slides[2], /# Slide 2/);
     assert.match(result.slides[3], /# Slide 3/);
+  });
+});
+
+describe("parseSlideRange", () => {
+  it("parses single number", () => {
+    assert.deepEqual(parseSlideRange("3", 5), [2]);
+  });
+
+  it("parses range", () => {
+    assert.deepEqual(parseSlideRange("2-4", 5), [1, 2, 3]);
+  });
+
+  it("parses comma-separated", () => {
+    assert.deepEqual(parseSlideRange("1,3,5", 5), [0, 2, 4]);
+  });
+
+  it("parses mixed range and numbers", () => {
+    assert.deepEqual(parseSlideRange("1,3-5", 5), [0, 2, 3, 4]);
+  });
+
+  it("deduplicates overlapping ranges", () => {
+    assert.deepEqual(parseSlideRange("1-3,2-4", 5), [0, 1, 2, 3]);
+  });
+
+  it("throws on out-of-range number", () => {
+    assert.throws(() => parseSlideRange("0", 5), ManipError);
+    assert.throws(() => parseSlideRange("6", 5), ManipError);
+  });
+
+  it("throws on invalid range", () => {
+    assert.throws(() => parseSlideRange("5-3", 5), ManipError);
+  });
+
+  it("throws on non-numeric", () => {
+    assert.throws(() => parseSlideRange("abc", 5), ManipError);
   });
 });

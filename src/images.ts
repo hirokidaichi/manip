@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative } from "node:path";
 
 /**
  * Extract image/media references from a Marp markdown file.
@@ -61,32 +61,40 @@ export function listAllImageFiles(slidesDir: string): string[] {
   return listFilesRecursive(imagesDir, slidesDir).sort();
 }
 
+const IGNORED_DIRS = new Set(["images", "node_modules", ".git", "dist"]);
+
 /**
- * Find all .md files in slidesDir (including subdirectories like aiagent/).
+ * Recursively find all .md files in slidesDir.
  */
-export function findAllMdFiles(slidesDir: string): string[] {
+function findMdFilesRecursive(dir: string): string[] {
   const results: string[] = [];
-  const entries = readdirSync(slidesDir);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return results;
+  }
   for (const entry of entries) {
-    const fullPath = join(slidesDir, entry);
-    const stat = statSync(fullPath);
-    if (stat.isFile() && entry.endsWith(".md")) {
-      results.push(fullPath);
-    } else if (stat.isDirectory() && entry !== "images" && entry !== "node_modules") {
-      // Check subdirectories (e.g., aiagent/)
-      try {
-        const subEntries = readdirSync(fullPath);
-        for (const sub of subEntries) {
-          if (sub.endsWith(".md")) {
-            results.push(join(fullPath, sub));
-          }
-        }
-      } catch {
-        // skip
+    const fullPath = join(dir, entry);
+    try {
+      const stat = statSync(fullPath);
+      if (stat.isFile() && entry.endsWith(".md")) {
+        results.push(fullPath);
+      } else if (stat.isDirectory() && !IGNORED_DIRS.has(entry)) {
+        results.push(...findMdFilesRecursive(fullPath));
       }
+    } catch {
+      // skip unreadable entries
     }
   }
-  return results.sort();
+  return results;
+}
+
+/**
+ * Find all .md files in slidesDir (recursively, skipping images/node_modules/.git/dist).
+ */
+export function findAllMdFiles(slidesDir: string): string[] {
+  return findMdFilesRecursive(slidesDir).sort();
 }
 
 /**

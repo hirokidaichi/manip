@@ -116,6 +116,21 @@ marp: true
     "utf-8"
   );
 
+  // Create deeply nested subdirectory with md
+  mkdirSync(join(tmpDir, "subdir", "deep"), { recursive: true });
+  writeFileSync(
+    join(tmpDir, "subdir", "deep", "deep.md"),
+    `---
+marp: true
+---
+
+# Deep
+
+![](images/arch/diagram.png)
+`,
+    "utf-8"
+  );
+
   return tmpDir;
 }
 
@@ -198,6 +213,11 @@ describe("findAllMdFiles", () => {
     assert.ok(mdFiles.some((f) => f.endsWith("test1.md")));
     assert.ok(mdFiles.some((f) => f.endsWith("test2.md")));
     assert.ok(mdFiles.some((f) => f.endsWith("nested.md")));
+  });
+
+  it("finds deeply nested md files", () => {
+    const mdFiles = findAllMdFiles(tmpDir);
+    assert.ok(mdFiles.some((f) => f.endsWith("deep.md")));
   });
 });
 
