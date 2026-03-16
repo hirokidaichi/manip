@@ -30,14 +30,50 @@ function handleError(e: unknown): never {
 program
   .name("manip")
   .description("Manipulate Marp markdown slides by number")
-  .version("0.1.0");
+  .version("0.2.0")
+  .addHelpText(
+    "after",
+    `
+Slide Range Syntax:
+  Many commands accept a <range> argument. Supported formats:
+    3         Single slide (slide 3)
+    2-5       Range of slides (slides 2, 3, 4, 5)
+    1,3,5     Comma-separated list (slides 1, 3, 5)
+    1-3,7     Mixed range and individual slides
+
+Common Options:
+  --json      Output structured JSON (available on: list, get, images)
+  --dry-run   Preview changes without writing to disk (available on: edit, append, delete, move, swap)
+
+Quick Start:
+  $ manip list slides.md              List all slides with titles
+  $ manip get slides.md 1             Show the first slide
+  $ manip count slides.md             Show total slide count
+  $ manip delete --dry-run slides.md 3  Preview deleting slide 3
+
+More Info:
+  https://github.com/hirokidaichi/manip`
+  );
 
 program
   .command("get")
   .description("Get slide(s) by number or range (e.g. 3, 1-5, 1,3,5)")
-  .argument("<file>", "Marp markdown file")
-  .argument("<range>", "Slide number or range (1-based)")
-  .option("--json", "Output as JSON")
+  .argument("<file>", "Marp markdown file path")
+  .argument("<range>", "Slide number or range (1-based): 3, 1-5, 1,3,5")
+  .option("--json", "Output as JSON with slide number and content")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip get slides.md 1              Get the first slide
+  $ manip get slides.md 2-4            Get slides 2, 3, and 4
+  $ manip get slides.md 1,3,5          Get specific slides
+  $ manip get slides.md 1 --json       Get slide 1 as JSON
+
+  Pipe to other tools:
+  $ manip get slides.md 3 | pbcopy     Copy slide 3 to clipboard
+  $ manip get slides.md 1-3 --json | jq '.[].title'`
+  )
   .action((file: string, range: string, opts: { json?: boolean }) => {
     try {
       const doc = readMarp(file);
@@ -61,10 +97,19 @@ program
 program
   .command("edit")
   .description("Replace a slide's content")
-  .argument("<file>", "Marp markdown file")
-  .argument("<number>", "Slide number (1-based)")
+  .argument("<file>", "Marp markdown file path")
+  .argument("<number>", "Slide number to replace (1-based)")
   .argument("[content]", "New slide content (reads from stdin if omitted)")
-  .option("--dry-run", "Show what would change without writing")
+  .option("--dry-run", "Preview the change without writing to disk")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip edit slides.md 2 "# New Title"             Replace slide 2 inline
+  $ manip edit slides.md 2 --dry-run "# New Title"    Preview the change
+  $ echo "# Updated" | manip edit slides.md 3         Replace slide 3 from stdin
+  $ cat new-slide.md | manip edit slides.md 1          Replace from a file`
+  )
   .action(
     async (
       file: string,
@@ -102,11 +147,20 @@ program
 
 program
   .command("append")
-  .description("Append a new slide")
-  .argument("<file>", "Marp markdown file")
-  .argument("<content>", "Slide content")
-  .option("-a, --after <number>", "Insert after slide number")
-  .option("--dry-run", "Show what would change without writing")
+  .description("Append a new slide at the end or after a specific slide")
+  .argument("<file>", "Marp markdown file path")
+  .argument("<content>", "Slide content to add")
+  .option("-a, --after <number>", "Insert after the given slide number instead of at the end")
+  .option("--dry-run", "Preview the change without writing to disk")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip append slides.md "# New Slide"              Add a slide at the end
+  $ manip append slides.md -a 2 "# Inserted"          Insert after slide 2
+  $ manip append slides.md --dry-run "# Draft"         Preview without writing
+  $ manip append slides.md "# Slide\\n\\nWith body text"  Multi-line content`
+  )
   .action(
     (
       file: string,
@@ -149,9 +203,20 @@ program
 program
   .command("delete")
   .description("Delete slide(s) by number or range (e.g. 3, 1-5, 1,3,5)")
-  .argument("<file>", "Marp markdown file")
-  .argument("<range>", "Slide number or range (1-based)")
-  .option("--dry-run", "Show what would change without writing")
+  .argument("<file>", "Marp markdown file path")
+  .argument("<range>", "Slide number or range to delete (1-based): 3, 1-5, 1,3,5")
+  .option("--dry-run", "Preview which slides would be deleted without writing")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip delete slides.md 3                Delete slide 3
+  $ manip delete slides.md 2-4              Delete slides 2, 3, and 4
+  $ manip delete slides.md 1,5,8            Delete specific slides
+  $ manip delete slides.md 3 --dry-run      Preview without deleting
+
+Note: Use --dry-run first to verify which slides will be removed.`
+  )
   .action(
     (file: string, range: string, opts: { dryRun?: boolean }) => {
       try {
@@ -182,8 +247,22 @@ program
 program
   .command("list")
   .description("List all slides with their numbers and titles")
-  .argument("<file>", "Marp markdown file")
-  .option("--json", "Output as JSON")
+  .argument("<file>", "Marp markdown file path")
+  .option("--json", "Output as JSON array with number and title fields")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip list slides.md                Show slide numbers and titles
+  $ manip list slides.md --json         Output as structured JSON
+
+Output Format:
+  Default:    "  1  Introduction"
+  JSON:       [{"number":1,"title":"Introduction"}, ...]
+
+  Titles are extracted from the first heading (# ...) in each slide.
+  Slides without headings show "(no title)".`
+  )
   .action((file: string, opts: { json?: boolean }) => {
     try {
       const doc = readMarp(file);
@@ -211,7 +290,14 @@ program
 program
   .command("count")
   .description("Show total number of slides")
-  .argument("<file>", "Marp markdown file")
+  .argument("<file>", "Marp markdown file path")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip count slides.md               Print the slide count
+  $ echo "Total: $(manip count slides.md) slides"   Use in scripts`
+  )
   .action((file: string) => {
     try {
       const doc = readMarp(file);
@@ -224,10 +310,18 @@ program
 program
   .command("move")
   .description("Move a slide from one position to another")
-  .argument("<file>", "Marp markdown file")
+  .argument("<file>", "Marp markdown file path")
   .argument("<from>", "Source slide number (1-based)")
-  .argument("<to>", "Destination slide number (1-based)")
-  .option("--dry-run", "Show what would change without writing")
+  .argument("<to>", "Destination position (1-based)")
+  .option("--dry-run", "Preview the move without writing to disk")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip move slides.md 5 2             Move slide 5 to position 2
+  $ manip move slides.md 1 10            Move first slide to position 10
+  $ manip move slides.md 3 1 --dry-run   Preview moving slide 3 to front`
+  )
   .action(
     (
       file: string,
@@ -266,11 +360,18 @@ program
 
 program
   .command("swap")
-  .description("Swap two slides")
-  .argument("<file>", "Marp markdown file")
+  .description("Swap the positions of two slides")
+  .argument("<file>", "Marp markdown file path")
   .argument("<n1>", "First slide number (1-based)")
   .argument("<n2>", "Second slide number (1-based)")
-  .option("--dry-run", "Show what would change without writing")
+  .option("--dry-run", "Preview the swap without writing to disk")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip swap slides.md 2 5             Swap slides 2 and 5
+  $ manip swap slides.md 1 3 --dry-run   Preview swapping slides 1 and 3`
+  )
   .action(
     (
       file: string,
@@ -308,10 +409,20 @@ program
 
 program
   .command("extract")
-  .description("Extract slide(s) to a new file")
-  .argument("<file>", "Source Marp markdown file")
-  .argument("<range>", "Slide range (e.g. 3, 2-5, 1,3,5)")
-  .argument("<output>", "Output file")
+  .description("Extract slide(s) to a new Marp file (preserves frontmatter)")
+  .argument("<file>", "Source Marp markdown file path")
+  .argument("<range>", "Slide range to extract (1-based): 3, 2-5, 1,3,5")
+  .argument("<output>", "Output file path for extracted slides")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip extract slides.md 1-3 intro.md          Extract first 3 slides
+  $ manip extract slides.md 5,8,10 highlights.md  Extract specific slides
+  $ manip extract slides.md 2-4 chapter2.md       Split into chapters
+
+Note: The output file will include the original frontmatter (theme, etc.).`
+  )
   .action((file: string, range: string, output: string) => {
     try {
       const doc = readMarp(file);
@@ -329,15 +440,38 @@ program
 
 program
   .command("images")
-  .description("Manage image references in Marp markdown files")
-  .argument("[file]", "Marp markdown file")
-  .option("--orphan", "Find image files not referenced by any markdown")
-  .option("--missing", "Find image references that don't exist on disk")
+  .description("List, audit, and manage image references in Marp markdown")
+  .argument("[file]", "Marp markdown file path (required unless --orphan)")
+  .option("--orphan", "Find image files on disk not referenced by any .md file")
+  .option("--missing", "Find image references in the file that don't exist on disk")
   .option(
     "--slides-dir <dir>",
-    "Slides directory (default: auto-detect from file or cwd)"
+    "Base directory for scanning (default: auto-detect from file or cwd)"
   )
-  .option("--json", "Output as JSON")
+  .option("--json", "Output as structured JSON")
+  .addHelpText(
+    "after",
+    `
+Modes:
+  (default)   List all image references found in <file>
+  --orphan    Scan the images/ directory for files not used by any .md
+  --missing   Check that every image referenced in <file> exists on disk
+
+Examples:
+  $ manip images slides.md                  List all image refs in slides.md
+  $ manip images slides.md --json           List as JSON
+  $ manip images --orphan                   Find unused images in cwd
+  $ manip images --orphan --slides-dir ./deck  Scan a specific directory
+  $ manip images slides.md --missing        Find broken image references
+  $ manip images slides.md --missing --json Output as JSON
+
+Use Cases:
+  Clean up unused images before publishing:
+    $ manip images --orphan | xargs rm
+
+  Verify all images exist before building:
+    $ manip images slides.md --missing && echo "All good!"`
+  )
   .action(
     (
       file: string | undefined,

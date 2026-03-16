@@ -1,18 +1,26 @@
 {
   "name": "marp-manip",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CLI tool for manipulating Marp markdown slides by number",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/hirokidaichi/manip.git"
   },
-  "keywords": ["marp", "markdown", "slides", "presentation", "cli"],
+  "keywords": [
+    "marp",
+    "markdown",
+    "slides",
+    "presentation",
+    "cli"
+  ],
   "engines": {
     "node": ">=18.0.0"
   },
   "main": "dist/src/index.js",
-  "files": ["dist/src"],
+  "files": [
+    "dist/src"
+  ],
   "bin": {
     "manip": "dist/src/index.js"
   },
