@@ -1,8 +1,14 @@
 #!/usr/bin/env node
 
 import { program } from "commander";
-import { resolve, dirname } from "node:path";
-import { readFileSync, writeFileSync, statSync } from "node:fs";
+import { resolve, dirname, basename, join } from "node:path";
+import {
+  readFileSync,
+  writeFileSync,
+  statSync,
+  mkdirSync,
+  existsSync,
+} from "node:fs";
 import {
   readMarp,
   writeMarp,
@@ -10,6 +16,7 @@ import {
   parseSlideRange,
 } from "./parser.js";
 import { listImages, findOrphans, findMissing } from "./images.js";
+import { extractImageRefs } from "./images.js";
 
 function validateSlideNumber(doc: { slides: string[] }, n: number): void {
   if (Number.isNaN(n) || n < 1 || n > doc.slides.length) {
@@ -27,10 +34,24 @@ function handleError(e: unknown): never {
   throw e;
 }
 
+/**
+ * Parse a pattern string. If wrapped in /.../ or /.../flags, treat as regex.
+ * Otherwise treat as a literal string (case-insensitive by default).
+ */
+function parsePattern(pattern: string): RegExp {
+  const regexMatch = pattern.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (regexMatch) {
+    return new RegExp(regexMatch[1], regexMatch[2]);
+  }
+  // Escape regex special chars for literal match
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(escaped, "g");
+}
+
 program
   .name("manip")
   .description("Manipulate Marp markdown slides by number")
-  .version("0.2.0")
+  .version("0.3.0")
   .addHelpText(
     "after",
     `
@@ -560,5 +581,466 @@ Use Cases:
       }
     }
   );
+
+// ─── search ───────────────────────────────────────────────────────────
+
+program
+  .command("search")
+  .description("Search for slides containing a pattern (string or /regex/)")
+  .argument("<file>", "Marp markdown file path")
+  .argument("<pattern>", 'Search pattern: literal string or /regex/flags')
+  .option("--json", "Output as JSON with slide number, title, and matching lines")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip search slides.md "アーキテクチャ"         Find slides with a keyword
+  $ manip search slides.md "/API.*設計/i"          Search with regex
+  $ manip search slides.md "TODO" --json           Output matches as JSON
+
+Output Format:
+  Default:    "  2  Architecture  (lines: 5, 8)"
+  JSON:       [{"number":2,"title":"Architecture","matches":["line 5","line 8"]}]`
+  )
+  .action(
+    (file: string, pattern: string, opts: { json?: boolean }) => {
+      try {
+        const doc = readMarp(file);
+        const re = parsePattern(pattern);
+        const results: {
+          number: number;
+          title: string | null;
+          matches: string[];
+        }[] = [];
+
+        doc.slides.forEach((slide, i) => {
+          const lines = slide.split("\n");
+          const matchingLines: string[] = [];
+          for (const line of lines) {
+            if (re.test(line)) {
+              matchingLines.push(line.trim());
+            }
+            re.lastIndex = 0; // reset for global regex
+          }
+          if (matchingLines.length > 0) {
+            const titleMatch = slide.match(/^#+\s+(.+)$/m);
+            results.push({
+              number: i + 1,
+              title: titleMatch ? titleMatch[1] : null,
+              matches: matchingLines,
+            });
+          }
+        });
+
+        if (opts.json) {
+          console.log(JSON.stringify(results, null, 2));
+          return;
+        }
+
+        if (results.length === 0) {
+          console.log("No matching slides found.");
+          return;
+        }
+
+        for (const r of results) {
+          const title = r.title ?? "(no title)";
+          console.log(
+            `${String(r.number).padStart(3)}  ${title}`
+          );
+          for (const m of r.matches) {
+            console.log(`       ${m}`);
+          }
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    }
+  );
+
+// ─── duplicate ────────────────────────────────────────────────────────
+
+program
+  .command("duplicate")
+  .description("Duplicate a slide and insert the copy after it")
+  .argument("<file>", "Marp markdown file path")
+  .argument("<number>", "Slide number to duplicate (1-based)")
+  .option("--dry-run", "Preview the duplication without writing to disk")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip duplicate slides.md 3             Duplicate slide 3 (becomes slide 4)
+  $ manip duplicate slides.md 1 --dry-run   Preview duplicating the first slide`
+  )
+  .action(
+    (file: string, number: string, opts: { dryRun?: boolean }) => {
+      try {
+        const doc = readMarp(file);
+        const n = parseInt(number, 10);
+        validateSlideNumber(doc, n);
+
+        if (opts.dryRun) {
+          console.log(
+            `[dry-run] Would duplicate slide ${n} (new slide ${n + 1})`
+          );
+          return;
+        }
+
+        doc.slides.splice(n, 0, doc.slides[n - 1]);
+        writeMarp(file, doc);
+        console.log(
+          `Slide ${n} duplicated. Copy is now slide ${n + 1}. (${doc.slides.length} slides total)`
+        );
+      } catch (e) {
+        handleError(e);
+      }
+    }
+  );
+
+// ─── replace ──────────────────────────────────────────────────────────
+
+program
+  .command("replace")
+  .description(
+    "Find and replace text across all slides (or specific slides)"
+  )
+  .argument("<file>", "Marp markdown file path")
+  .argument("<search>", 'Search string or /regex/flags')
+  .argument("<replacement>", "Replacement string")
+  .option(
+    "-s, --slides <range>",
+    "Limit replacement to specific slides (e.g. 1-3, 5)"
+  )
+  .option("--dry-run", "Preview replacements without writing to disk")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip replace slides.md "2025年" "2026年"                     Replace text
+  $ manip replace slides.md "/株式会社\\s*Foo/g" "株式会社Bar"      Regex replace
+  $ manip replace slides.md "old" "new" -s 1-3                    Limit to slides 1-3
+  $ manip replace slides.md "draft" "final" --dry-run             Preview changes
+
+Note: Without /g flag on regex, only the first match per slide is replaced.
+      String patterns replace ALL occurrences by default.`
+  )
+  .action(
+    (
+      file: string,
+      search: string,
+      replacement: string,
+      opts: { slides?: string; dryRun?: boolean }
+    ) => {
+      try {
+        const doc = readMarp(file);
+        const re = parsePattern(search);
+
+        // Determine which slides to process
+        let targetIndices: number[];
+        if (opts.slides) {
+          targetIndices = parseSlideRange(opts.slides, doc.slides.length);
+        } else {
+          targetIndices = doc.slides.map((_, i) => i);
+        }
+
+        let totalReplacements = 0;
+        const changes: { slide: number; count: number }[] = [];
+
+        for (const idx of targetIndices) {
+          let count = 0;
+          const original = doc.slides[idx];
+          const replaced = original.replace(re, (...args) => {
+            count++;
+            // Support $1, $2, etc. capture group references in replacement
+            let result = replacement;
+            for (let g = 1; g < args.length - 2; g++) {
+              result = result.replace(
+                new RegExp(`\\$${g}`, "g"),
+                args[g] ?? ""
+              );
+            }
+            return result;
+          });
+          if (count > 0) {
+            doc.slides[idx] = replaced;
+            totalReplacements += count;
+            changes.push({ slide: idx + 1, count });
+          }
+        }
+
+        if (totalReplacements === 0) {
+          console.log("No matches found.");
+          return;
+        }
+
+        if (opts.dryRun) {
+          console.log(
+            `[dry-run] Would make ${totalReplacements} replacement(s) across ${changes.length} slide(s):`
+          );
+          for (const c of changes) {
+            console.log(`  Slide ${c.slide}: ${c.count} replacement(s)`);
+          }
+          return;
+        }
+
+        writeMarp(file, doc);
+        console.log(
+          `Replaced ${totalReplacements} occurrence(s) across ${changes.length} slide(s).`
+        );
+        for (const c of changes) {
+          console.log(`  Slide ${c.slide}: ${c.count} replacement(s)`);
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    }
+  );
+
+// ─── merge ────────────────────────────────────────────────────────────
+
+program
+  .command("merge")
+  .description("Merge multiple Marp files into one")
+  .argument("<files...>", "Two or more Marp files (last argument is the output file)")
+  .option(
+    "--frontmatter <strategy>",
+    'Which frontmatter to keep: "first" (default) or "none"',
+    "first"
+  )
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip merge intro.md body.md outro.md all.md     Merge 3 files into all.md
+  $ manip merge ch1.md ch2.md book.md                Merge 2 files
+  $ manip merge a.md b.md out.md --frontmatter none  Discard all frontmatter
+
+Note: The last argument is always the output file.
+      By default, frontmatter from the first input file is used.`
+  )
+  .action(
+    (
+      files: string[],
+      opts: { frontmatter: string }
+    ) => {
+      try {
+        if (files.length < 3) {
+          throw new ManipError(
+            "merge requires at least 2 input files and 1 output file"
+          );
+        }
+
+        const output = files[files.length - 1];
+        const inputs = files.slice(0, -1);
+
+        const docs = inputs.map((f) => readMarp(f));
+
+        let frontmatter = "";
+        if (opts.frontmatter === "first") {
+          frontmatter = docs[0].frontmatter;
+        }
+
+        const allSlides = docs.flatMap((d) => d.slides);
+
+        writeMarp(output, { frontmatter, slides: allSlides });
+        console.log(
+          `Merged ${inputs.length} files (${allSlides.length} slides total) into ${output}.`
+        );
+      } catch (e) {
+        handleError(e);
+      }
+    }
+  );
+
+// ─── split ────────────────────────────────────────────────────────────
+
+program
+  .command("split")
+  .description("Split a Marp file into multiple files")
+  .argument("<file>", "Marp markdown file to split")
+  .option("--every <n>", "Split every N slides", parseInt)
+  .option("--at <positions>", "Split at specific slide positions (e.g. 3,7,12)")
+  .option("--prefix <name>", "Output filename prefix (default: input filename)")
+  .option("--output-dir <dir>", "Output directory (default: same as input file)")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip split slides.md --every 5                Split every 5 slides
+  $ manip split slides.md --at 3,7                 Split at positions 3 and 7
+  $ manip split slides.md --every 3 --prefix ch    Output: ch-1.md, ch-2.md, ...
+  $ manip split slides.md --every 5 --output-dir parts
+
+Split positions (--at):
+  Position N means "split after slide N". So --at 3,7 with 10 slides produces:
+    File 1: slides 1-3
+    File 2: slides 4-7
+    File 3: slides 8-10
+
+Note: Either --every or --at is required. Frontmatter is preserved in all output files.`
+  )
+  .action(
+    (
+      file: string,
+      opts: {
+        every?: number;
+        at?: string;
+        prefix?: string;
+        outputDir?: string;
+      }
+    ) => {
+      try {
+        if (!opts.every && !opts.at) {
+          throw new ManipError(
+            "split requires either --every <n> or --at <positions>"
+          );
+        }
+
+        const doc = readMarp(file);
+        const total = doc.slides.length;
+
+        // Determine split points (0-based indices where chunks end)
+        let splitAfter: number[];
+        if (opts.every) {
+          if (opts.every < 1) {
+            throw new ManipError("--every must be at least 1");
+          }
+          splitAfter = [];
+          for (let i = opts.every; i < total; i += opts.every) {
+            splitAfter.push(i);
+          }
+        } else {
+          // --at: parse comma-separated 1-based positions
+          splitAfter = opts
+            .at!.split(",")
+            .map((s) => {
+              const n = parseInt(s.trim(), 10);
+              if (Number.isNaN(n) || n < 1 || n >= total) {
+                throw new ManipError(
+                  `split position ${s.trim()} out of range (1-${total - 1})`
+                );
+              }
+              return n;
+            })
+            .sort((a, b) => a - b);
+        }
+
+        // Build chunks
+        const chunks: string[][] = [];
+        let start = 0;
+        for (const pos of splitAfter) {
+          chunks.push(doc.slides.slice(start, pos));
+          start = pos;
+        }
+        chunks.push(doc.slides.slice(start));
+
+        // Determine output paths
+        const inputBase = basename(file, ".md");
+        const prefix = opts.prefix ?? inputBase;
+        const outputDir = opts.outputDir
+          ? resolve(opts.outputDir)
+          : dirname(resolve(file));
+
+        if (opts.outputDir && !existsSync(outputDir)) {
+          mkdirSync(outputDir, { recursive: true });
+        }
+
+        const outputFiles: string[] = [];
+        for (let i = 0; i < chunks.length; i++) {
+          const outPath = join(outputDir, `${prefix}-${i + 1}.md`);
+          writeMarp(outPath, {
+            frontmatter: doc.frontmatter,
+            slides: chunks[i],
+          });
+          outputFiles.push(outPath);
+        }
+
+        console.log(
+          `Split into ${chunks.length} files:`
+        );
+        for (let i = 0; i < outputFiles.length; i++) {
+          console.log(
+            `  ${outputFiles[i]} (${chunks[i].length} slides)`
+          );
+        }
+      } catch (e) {
+        handleError(e);
+      }
+    }
+  );
+
+// ─── stats ────────────────────────────────────────────────────────────
+
+program
+  .command("stats")
+  .description("Show statistics for each slide and the deck overall")
+  .argument("<file>", "Marp markdown file path")
+  .option("--json", "Output as structured JSON")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  $ manip stats slides.md               Show per-slide and total stats
+  $ manip stats slides.md --json        Output as JSON
+
+Output includes per-slide: title, character count, line count, image count.
+Overall: total slides, total characters, total images.`
+  )
+  .action((file: string, opts: { json?: boolean }) => {
+    try {
+      const doc = readMarp(file);
+      const slideStats = doc.slides.map((slide, i) => {
+        const titleMatch = slide.match(/^#+\s+(.+)$/m);
+        const content = slide.trim();
+        const chars = content.length;
+        const lines = content === "" ? 0 : content.split("\n").length;
+        const images = extractImageRefs(slide).length;
+        return {
+          number: i + 1,
+          title: titleMatch ? titleMatch[1] : null,
+          chars,
+          lines,
+          images,
+        };
+      });
+
+      const totalChars = slideStats.reduce((s, x) => s + x.chars, 0);
+      const totalImages = slideStats.reduce((s, x) => s + x.images, 0);
+      const totalLines = slideStats.reduce((s, x) => s + x.lines, 0);
+
+      if (opts.json) {
+        console.log(
+          JSON.stringify(
+            {
+              slides: slideStats,
+              total: {
+                slideCount: slideStats.length,
+                chars: totalChars,
+                lines: totalLines,
+                images: totalImages,
+              },
+            },
+            null,
+            2
+          )
+        );
+        return;
+      }
+
+      console.log(
+        `${slideStats.length} slides | ${totalChars.toLocaleString()} chars | ${totalLines} lines | ${totalImages} images\n`
+      );
+      const numWidth = String(slideStats.length).length;
+      for (const s of slideStats) {
+        const title = s.title ?? "(no title)";
+        const img = s.images > 0 ? `, ${s.images} img` : "";
+        console.log(
+          `${String(s.number).padStart(numWidth + 1)}  ${title}  (${s.chars} chars, ${s.lines} lines${img})`
+        );
+      }
+    } catch (e) {
+      handleError(e);
+    }
+  });
 
 program.parse();

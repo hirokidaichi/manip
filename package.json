@@ -1,6 +1,6 @@
 {
   "name": "marp-manip",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "CLI tool for manipulating Marp markdown slides by number",
   "license": "MIT",
   "repository": {
@@ -29,7 +29,7 @@
     "clean": "rm -rf dist",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run clean && npm run build",
-    "test": "tsc && node --test dist/test/parser.test.js dist/test/cli.test.js dist/test/images.test.js"
+    "test": "tsc && node --test dist/test/parser.test.js dist/test/cli.test.js dist/test/images.test.js dist/test/new-commands.test.js"
   },
   "dependencies": {
     "commander": "^12.1.0"
